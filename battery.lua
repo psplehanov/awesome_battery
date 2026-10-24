@@ -1,6 +1,5 @@
 local wibox = require("wibox")
 local gears = require("gears")
-local awful = require("awful")
 local naughty = require("naughty")
 
 local M = {}
@@ -15,7 +14,7 @@ local function read_num(path)
     if not f then return nil end
     local v = f:read("*a")
     f:close()
-    return tonumber(v:match("%d+"))
+    return tonumber(v:match("^%s*(-?%d+)"))
 end
 
 local function read_str(path)
@@ -23,13 +22,17 @@ local function read_str(path)
     if not f then return nil end
     local v = f:read("*a")
     f:close()
-    return v:gsub("%s+$", "")
+    return (v:gsub("%s+$", ""))
 end
 
 -- ===== Сбор данных =====
 
+local function clamp_percent(value)
+    return math.max(0, math.min(100, value))
+end
+
 local function read_battery(sys)
-    local level    = read_num(sys .. "/capacity") or 0
+    local level    = clamp_percent(read_num(sys .. "/capacity") or 0)
     local status   = read_str(sys .. "/status") or "Unknown"
     local full     = read_num(sys .. "/charge_full")
     local design   = read_num(sys .. "/charge_full_design")
@@ -38,7 +41,7 @@ local function read_battery(sys)
 
     local health = nil
     if full and design and design > 0 then
-        health = math.floor(full / design * 100 + 0.5)
+        health = clamp_percent(math.floor(full / design * 100 + 0.5))
     end
 
     local remaining_min = nil
@@ -100,7 +103,7 @@ function M.new(opts)
             cr:set_source_rgb(39/255, 39/255, 39/255)
         end
 
-	local inner_top    = 3.7 + 2
+        local inner_top    = 3.7 + 2
         local inner_bottom = h - 0.7 - 2
         local inner_height = inner_bottom - inner_top
         local fill = inner_height * (s.level / 100)
@@ -163,8 +166,6 @@ function M.new(opts)
 
     local function update()
         widget._state = read_battery(sys)
-	
-	widget:emit_signal("widget::layout_changed")
         widget:emit_signal("widget::redraw_needed")
     end
 
