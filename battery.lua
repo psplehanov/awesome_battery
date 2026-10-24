@@ -5,7 +5,8 @@ local naughty = require("naughty")
 
 local M = {}
 
-local SYS = "/sys/class/power_supply/BAT0"
+local POWER_SUPPLY = "/sys/class/power_supply/"
+local DEFAULT_BATTERY = "BAT0"
 
 -- ===== Чтение sysfs =====
 
@@ -27,13 +28,13 @@ end
 
 -- ===== Сбор данных =====
 
-local function read_battery()
-    local level    = read_num(SYS .. "/capacity") or 0
-    local status   = read_str(SYS .. "/status") or "Unknown"
-    local full     = read_num(SYS .. "/charge_full")
-    local design   = read_num(SYS .. "/charge_full_design")
-    local cycles   = read_num(SYS .. "/cycle_count")
-    local model    = read_str(SYS .. "/model_name")
+local function read_battery(sys)
+    local level    = read_num(sys .. "/capacity") or 0
+    local status   = read_str(sys .. "/status") or "Unknown"
+    local full     = read_num(sys .. "/charge_full")
+    local design   = read_num(sys .. "/charge_full_design")
+    local cycles   = read_num(sys .. "/cycle_count")
+    local model    = read_str(sys .. "/model_name")
 
     local health = nil
     if full and design and design > 0 then
@@ -42,8 +43,8 @@ local function read_battery()
 
     local remaining_min = nil
     if status == "Discharging" then
-        local charge_now  = read_num(SYS .. "/charge_now")
-        local current_now = read_num(SYS .. "/current_now")
+        local charge_now  = read_num(sys .. "/charge_now")
+        local current_now = read_num(sys .. "/current_now")
         if charge_now and current_now and current_now ~= 0 then
             local hours = charge_now / math.abs(current_now)
             remaining_min = math.floor(hours * 60)
@@ -63,7 +64,10 @@ end
 
 -- ===== Виджет =====
 
-function M.new()
+function M.new(opts)
+    opts = opts or {}
+    local sys = POWER_SUPPLY .. (opts.battery or DEFAULT_BATTERY)
+
     local widget = wibox.widget.base.make_widget()
     widget._state = { level = 0, charging = false }
 
@@ -121,7 +125,7 @@ function M.new()
     function widget:show_details()
         widget:hide_details()
 
-        local b = read_battery()
+        local b = read_battery(sys)
         local lines = {}
 
         if b.model then
@@ -158,7 +162,7 @@ function M.new()
     -- ===== Обновление =====
 
     local function update()
-        widget._state = read_battery()
+        widget._state = read_battery(sys)
 	
 	widget:emit_signal("widget::layout_changed")
         widget:emit_signal("widget::redraw_needed")
