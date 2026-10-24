@@ -31,6 +31,94 @@ local function clamp_percent(value)
     return math.max(0, math.min(100, value))
 end
 
+local function format_minutes(total)
+    return string.format("%dч %02dм", math.floor(total / 60), total % 60)
+end
+
+local CHARGE_WINDOW     = 15 * 60
+local CHARGE_MIN_SPAN   = 5 * 60
+local CHARGE_MIN_GROWTH = 0.02
+
+-- Наклон по всем точкам окна: устойчивее разности первого и последнего замера.
+local function trend(history)
+    local n = #history
+    if n < 3 then return nil end
+
+    local t0 = history[1].t
+    local sum_t, sum_v = 0, 0
+    for _, p in ipairs(history) do
+        sum_t = sum_t + (p.t - t0)
+        sum_v = sum_v + p.value
+    end
+
+    local mean_t = sum_t / n
+    local mean_v = sum_v / n
+    local num, den = 0, 0
+    for _, p in ipairs(history) do
+        local dt = (p.t - t0) - mean_t
+        num = num + dt * (p.value - mean_v)
+        den = den + dt * dt
+    end
+
+    if den == 0 then return nil end
+    return num / den
+end
+
+local function round_minutes(total)
+    if total < 10 then return total end
+    if total < 60 then return math.floor(total / 5 + 0.5) * 5 end
+    return math.floor(total / 10 + 0.5) * 10
+end
+
+local function estimate_minutes(history, value, goal, timestamp)
+    local first = history[1]
+    if not first then return nil end
+
+    local span = timestamp - first.t
+    if span < CHARGE_MIN_SPAN then return nil end
+
+    local rate = trend(history)
+    if not rate or rate <= 0 then return nil end
+
+    -- Прирост меньше 2% не отличить от шага квантования 1%.
+    if rate * span < goal * CHARGE_MIN_GROWTH then return nil end
+
+    local left = goal - value
+    if left <= 0 then return 0 end
+    return math.max(0, math.floor(left / rate / 60 + 0.5))
+end
+
+local function progress(b)
+    if b.now and b.full and b.full > 0 then
+        return b.now, b.full, "raw"
+    end
+    return b.level, 100, "level"
+end
+
+-- Резкое изменение принимается только после подтверждения следующим замером.
+local function blend_estimate(state, previous, fresh)
+    if fresh == nil then return previous end
+
+    if previous == nil or math.abs(fresh - previous) <= 2 then
+        state.pending, state.count = nil, 0
+        return fresh
+    end
+
+    if state.pending and math.abs(fresh - state.pending) <= 2 then
+        state.count = state.count + 1
+    else
+        state.count = 1
+    end
+    state.pending = fresh
+
+    if state.count >= 2 then
+        state.pending, state.count = nil, 0
+        return fresh
+    end
+
+    return previous
+end
+
 local function read_battery(sys)
     local present   = read_num(sys .. "/present")
     local available = read_str(sys .. "/type") == "Battery"
@@ -72,10 +160,11 @@ local function read_battery(sys)
     level = math.floor(clamp_percent(level or 0) + 0.5)
 
     local remaining_min = nil
-    if status == "Discharging" then
-        local current_now = read_num(sys .. "/current_now")
-        local power_now   = read_num(sys .. "/power_now")
+    local until_full_min = nil
+    local current_now = read_num(sys .. "/current_now")
+    local power_now   = read_num(sys .. "/power_now")
 
+    if status == "Discharging" then
         local hours
         if charge_now and current_now and current_now ~= 0 then
             hours = charge_now / math.abs(current_now)
@@ -86,17 +175,31 @@ local function read_battery(sys)
         if hours then
             remaining_min = math.max(0, math.floor(hours * 60))
         end
+    elseif status == "Charging" then
+        local hours
+        if charge_now and charge_full and current_now and current_now ~= 0 then
+            hours = (charge_full - charge_now) / math.abs(current_now)
+        elseif energy_now and energy_full and power_now and power_now ~= 0 then
+            hours = (energy_full - energy_now) / math.abs(power_now)
+        end
+
+        if hours then
+            until_full_min = math.max(0, math.floor(hours * 60))
+        end
     end
 
     return {
-        available = available,
-        level     = level,
-        status    = status,
-        health    = health,
-        cycles    = cycles,
-        model     = model,
-        remaining = remaining_min,
-        charging  = (status == "Charging" or status == "Full"),
+        available  = available,
+        level      = level,
+        status     = status,
+        health     = health,
+        cycles     = cycles,
+        model      = model,
+        now        = now,
+        full       = full,
+        remaining  = remaining_min,
+        until_full = until_full_min,
+        charging   = (status == "Charging" or status == "Full"),
     }
 end
 
@@ -108,6 +211,63 @@ function M.new(opts)
 
     local widget = wibox.widget.base.make_widget()
     widget._state = { level = 0, charging = false }
+
+    local history = {}
+    local estimate = nil
+    local smoothing = { pending = nil, count = 0 }
+
+    local function record_progress(b)
+        if not b.available or b.status ~= "Charging" then
+            if #history > 0 then
+                history = {}
+            end
+            return
+        end
+
+        local value, _, source = progress(b)
+        local timestamp = os.time()
+        local last = history[#history]
+
+        if last and (timestamp < last.t or timestamp - last.t > CHARGE_WINDOW) then
+            history = {}
+        end
+
+        if #history > 0 and history[#history].source ~= source then
+            history = {}
+        end
+
+        table.insert(history, { t = timestamp, value = value, source = source })
+
+        local cutoff = timestamp - CHARGE_WINDOW
+        while #history > 1 and history[1].t < cutoff do
+            table.remove(history, 1)
+        end
+    end
+
+    local function estimate_until_full(b)
+        local value, goal = progress(b)
+        return estimate_minutes(history, value, goal, os.time())
+    end
+
+    local function refresh_estimate(b)
+        if not b.available or b.status ~= "Charging" then
+            history = {}
+            estimate = nil
+            smoothing.pending, smoothing.count = nil, 0
+            return
+        end
+
+        record_progress(b)
+
+        local fresh = estimate_until_full(b)
+        if type(fresh) ~= "number" then
+            fresh = b.until_full -- прогресс не измерим, показываем оценку по току
+        else
+            fresh = round_minutes(fresh)
+        end
+
+        estimate = blend_estimate(smoothing, estimate, fresh)
+    end
 
     function widget:fit(context, width, height)
         return 10, 18
@@ -164,6 +324,10 @@ function M.new(opts)
         widget:hide_details()
 
         local b = read_battery(sys)
+        if b.status == "Charging" then
+            b.until_full = estimate
+        end
+
         local lines = {}
 
         if not b.available then
@@ -177,9 +341,12 @@ function M.new(opts)
             table.insert(lines, "Статус: " .. b.status)
 
             if b.remaining then
-                local hh = math.floor(b.remaining / 60)
-                local mm = b.remaining % 60
-                table.insert(lines, string.format("Осталось: %dч %02dм", hh, mm))
+                table.insert(lines, "Осталось: " .. format_minutes(b.remaining))
+            end
+            if b.until_full then
+                table.insert(lines, "До полной: " .. format_minutes(b.until_full))
+            elseif b.status == "Charging" and b.available then
+                table.insert(lines, "До полной: —")
             end
 
             if b.health then
@@ -205,7 +372,9 @@ function M.new(opts)
     -- ===== Обновление =====
 
     local function update()
-        widget._state = read_battery(sys)
+        local b = read_battery(sys)
+        refresh_estimate(b)
+        widget._state = b
         widget:emit_signal("widget::redraw_needed")
     end
 
