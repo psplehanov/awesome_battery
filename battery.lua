@@ -6,6 +6,7 @@ local M = {}
 
 local POWER_SUPPLY = "/sys/class/power_supply/"
 local DEFAULT_BATTERY = "BAT0"
+local DEFAULT_INTERVAL = 30
 
 -- ===== Чтение sysfs =====
 
@@ -209,6 +210,9 @@ function M.new(opts)
     opts = opts or {}
     local sys = POWER_SUPPLY .. (opts.battery or DEFAULT_BATTERY)
 
+    local interval = tonumber(opts.interval) or DEFAULT_INTERVAL
+    if interval < 1 then interval = 1 end
+
     local widget = wibox.widget.base.make_widget()
     widget._state = { level = 0, charging = false }
 
@@ -379,8 +383,8 @@ function M.new(opts)
     end
 
     update()
-    gears.timer {
-        timeout   = 30,
+    widget._timer = gears.timer {
+        timeout   = interval,
         autostart = true,
         call_now  = false,
         callback  = update,
