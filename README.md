@@ -5,6 +5,9 @@
 Виджет рисует иконку батареи через Cairo и не требует внешних зависимостей:
 достаточно Linux-системы с `sysfs` и AwesomeWM 4.3+.
 
+Данные читаются из `/sys/class/power_supply/<имя батареи>/`. Поддерживаются
+оба варианта драйверов: `charge_*` + `current_now` и `energy_*` + `power_now`.
+
 ## Подключение
 
 Скопируйте battery.lua в конфигурацию awesome. В примере используется путь `~/.config/awesome/widgets/battery.lua`.

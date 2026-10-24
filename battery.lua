@@ -32,29 +32,64 @@ local function clamp_percent(value)
 end
 
 local function read_battery(sys)
-    local level    = clamp_percent(read_num(sys .. "/capacity") or 0)
-    local status   = read_str(sys .. "/status") or "Unknown"
-    local full     = read_num(sys .. "/charge_full")
-    local design   = read_num(sys .. "/charge_full_design")
-    local cycles   = read_num(sys .. "/cycle_count")
-    local model    = read_str(sys .. "/model_name")
+    local present   = read_num(sys .. "/present")
+    local available = read_str(sys .. "/type") == "Battery"
+        and (present == nil or present ~= 0)
+    local status    = read_str(sys .. "/status") or "Unknown"
+    local cycles    = read_num(sys .. "/cycle_count")
+    local model     = read_str(sys .. "/model_name")
+
+    local charge_now  = read_num(sys .. "/charge_now")
+    local charge_full = read_num(sys .. "/charge_full")
+    local energy_now  = read_num(sys .. "/energy_now")
+    local energy_full = read_num(sys .. "/energy_full")
+
+    local full, design
+    if charge_full then
+        full   = charge_full
+        design = read_num(sys .. "/charge_full_design")
+    elseif energy_full then
+        full   = energy_full
+        design = read_num(sys .. "/energy_full_design")
+    end
+
+    local now
+    if charge_full then
+        now = charge_now
+    elseif energy_full then
+        now = energy_now
+    end
 
     local health = nil
     if full and design and design > 0 then
         health = clamp_percent(math.floor(full / design * 100 + 0.5))
     end
 
+    local level = read_num(sys .. "/capacity")
+    if not level and now and full and full > 0 then
+        level = now / full * 100
+    end
+    level = math.floor(clamp_percent(level or 0) + 0.5)
+
     local remaining_min = nil
     if status == "Discharging" then
-        local charge_now  = read_num(sys .. "/charge_now")
         local current_now = read_num(sys .. "/current_now")
+        local power_now   = read_num(sys .. "/power_now")
+
+        local hours
         if charge_now and current_now and current_now ~= 0 then
-            local hours = charge_now / math.abs(current_now)
-            remaining_min = math.floor(hours * 60)
+            hours = charge_now / math.abs(current_now)
+        elseif energy_now and power_now and power_now ~= 0 then
+            hours = energy_now / math.abs(power_now)
+        end
+
+        if hours then
+            remaining_min = math.max(0, math.floor(hours * 60))
         end
     end
 
     return {
+        available = available,
         level     = level,
         status    = status,
         health    = health,
@@ -131,23 +166,28 @@ function M.new(opts)
         local b = read_battery(sys)
         local lines = {}
 
-        if b.model then
-            table.insert(lines, "Модель: " .. b.model)
-        end
-        table.insert(lines, string.format("Заряд: %d%%", b.level))
-        table.insert(lines, "Статус: " .. b.status)
+        if not b.available then
+            table.insert(lines, "Батарея не найдена")
+            table.insert(lines, "Путь: " .. sys)
+        else
+            if b.model then
+                table.insert(lines, "Модель: " .. b.model)
+            end
+            table.insert(lines, string.format("Заряд: %d%%", b.level))
+            table.insert(lines, "Статус: " .. b.status)
 
-        if b.remaining then
-            local hh = math.floor(b.remaining / 60)
-            local mm = b.remaining % 60
-            table.insert(lines, string.format("Осталось: %dч %02dм", hh, mm))
-        end
+            if b.remaining then
+                local hh = math.floor(b.remaining / 60)
+                local mm = b.remaining % 60
+                table.insert(lines, string.format("Осталось: %dч %02dм", hh, mm))
+            end
 
-        if b.health then
-            table.insert(lines, string.format("Здоровье: %d%%", b.health))
-        end
-        if b.cycles then
-            table.insert(lines, string.format("Циклов: %d", b.cycles))
+            if b.health then
+                table.insert(lines, string.format("Здоровье: %d%%", b.health))
+            end
+            if b.cycles then
+                table.insert(lines, string.format("Циклов: %d", b.cycles))
+            end
         end
 
         notif = naughty.notify({
