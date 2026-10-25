@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="images/battery_example.png" width="150">
+</p>
+
 # awesome_battery
 
 Компактный виджет батареи для [AwesomeWM](https://awesomewm.org/).
