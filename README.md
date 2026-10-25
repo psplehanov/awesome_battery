@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="images/battery_example.png" width="150">
+  <img src="images/battery_example.png" width="600">
 </p>
 
 # awesome_battery
