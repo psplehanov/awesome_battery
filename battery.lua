@@ -7,6 +7,13 @@ local M = {}
 local POWER_SUPPLY = "/sys/class/power_supply/"
 local DEFAULT_BATTERY = "BAT0"
 local DEFAULT_INTERVAL = 30
+local DEFAULT_COLORS = {
+    border   = "#272727",
+    charging = "#79A8C4",
+    low      = "#C45555",
+    medium   = "#D6AD48",
+    normal   = "#272727",
+}
 
 -- ===== Чтение sysfs =====
 
@@ -206,12 +213,46 @@ end
 
 -- ===== Виджет =====
 
+local function parse_color(value)
+    if type(value) ~= "string" then return nil end
+
+    local hex = value:match("^#?(%x%x%x%x%x%x)$")
+    if hex then
+        return {
+            r = tonumber(hex:sub(1, 2), 16) / 255,
+            g = tonumber(hex:sub(3, 4), 16) / 255,
+            b = tonumber(hex:sub(5, 6), 16) / 255,
+        }
+    end
+
+    local short = value:match("^#(%x%x%x)$")
+    if short then
+        local function expand(i)
+            local digit = short:sub(i, i)
+            return tonumber(digit .. digit, 16) / 255
+        end
+        return { r = expand(1), g = expand(2), b = expand(3) }
+    end
+
+    return nil
+end
+
+local function set_color(cr, color)
+    cr:set_source_rgb(color.r, color.g, color.b)
+end
+
 function M.new(opts)
     opts = opts or {}
     local sys = POWER_SUPPLY .. (opts.battery or DEFAULT_BATTERY)
 
     local interval = tonumber(opts.interval) or DEFAULT_INTERVAL
     if interval < 1 then interval = 1 end
+
+    local custom = opts.colors or {}
+    local colors = {}
+    for name, default in pairs(DEFAULT_COLORS) do
+        colors[name] = parse_color(custom[name]) or parse_color(default)
+    end
 
     local widget = wibox.widget.base.make_widget()
     widget._state = { level = 0, charging = false }
@@ -282,7 +323,7 @@ function M.new(opts)
         local s = widget._state
 
         -- Контур корпуса (отступ сверху под контакт)
-        cr:set_source_rgb(0.153, 0.153, 0.153)
+        set_color(cr, colors.border)
         cr:set_line_width(1.4)
         cr:rectangle(0.7, 3.7, w - 1.4, h - 4.4)
         cr:stroke()
@@ -293,13 +334,13 @@ function M.new(opts)
 
         -- Заливка
         if s.charging then
-            cr:set_source_rgb(121/255, 168/255, 196/255)
+            set_color(cr, colors.charging)
         elseif s.level < 30 then
-            cr:set_source_rgb(196/255, 85/255, 85/255)
+            set_color(cr, colors.low)
         elseif s.level <= 60 then
-            cr:set_source_rgb(214/255, 173/255, 72/255)
+            set_color(cr, colors.medium)
         else
-            cr:set_source_rgb(39/255, 39/255, 39/255)
+            set_color(cr, colors.normal)
         end
 
         local inner_top    = 3.7 + 2
