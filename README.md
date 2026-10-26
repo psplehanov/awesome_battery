@@ -4,17 +4,43 @@
 
 # awesome_battery
 
-Компактный виджет батареи для [AwesomeWM](https://awesomewm.org/).
+A compact battery widget for [AwesomeWM](https://awesomewm.org/).
 
-Виджет рисует иконку батареи через Cairo и не требует внешних зависимостей:
-достаточно Linux-системы с `sysfs` и AwesomeWM 4.3+.
+The icon is drawn with Cairo and needs no external dependencies: only a Linux
+system with `sysfs` and AwesomeWM 4.3+.
 
-Данные читаются из `/sys/class/power_supply/<имя батареи>/`. Поддерживаются
-оба варианта драйверов: `charge_*` + `current_now` и `energy_*` + `power_now`.
+Data is read from `/sys/class/power_supply/<battery name>/`. Both driver
+variants are supported: `charge_*` + `current_now` and `energy_*` + `power_now`.
 
-## Подключение
+## Features
 
-Скопируйте battery.lua в конфигурацию awesome. В примере используется путь `~/.config/awesome/widgets/battery.lua`.
+- Battery icon drawn with Cairo; no icon theme is required.
+- Direct `sysfs` reads, no helper scripts or daemons.
+- Support for both `charge_*` and `energy_*` drivers.
+- Fill colour reflects the state: charging, below 30%, 30–60%, above 60%.
+- Hover notification with model, charge, status, remaining time, health and
+  cycle count.
+- Battery name, polling interval and colours are configurable from `rc.lua`.
+
+## Requirements
+
+- Linux with `sysfs` and the `/sys/class/power_supply/` interface.
+- AwesomeWM 4.3 or newer.
+
+## Installation
+
+Copy `battery.lua` into your AwesomeWM configuration, or clone the repository
+and link the file. The examples below use `~/.config/awesome/widgets/battery.lua`:
+
+```sh
+git clone https://github.com/psplehanov/awesome_battery.git ~/.config/awesome/awesome_battery
+mkdir -p ~/.config/awesome/widgets
+ln -sf ~/.config/awesome/awesome_battery/battery.lua ~/.config/awesome/widgets/battery.lua
+```
+
+Then restart AwesomeWM.
+
+## Usage
 
 rc.lua
 
@@ -31,80 +57,89 @@ mybattery = wibox.widget {
 }
 ```
 
-`wibox.container.place` нужен, чтобы иконка была выровнена по центру
-по вертикали в wibar. Затем добавьте `mybattery` в wibar, например
-в правую часть:
+`wibox.container.place` centres the icon vertically in the wibar. Then add
+`mybattery` to the bar, for example to its right side:
 
 ```lua
 {
     layout = wibox.layout.fixed.horizontal,
     mybattery,
-    -- другие виджеты
+    -- other widgets
 },
 ```
 
+## Configuration
 
-## Параметры виджета
+| Option     | Default   | Description                                          |
+|------------|-----------|------------------------------------------------------|
+| `battery`  | `"BAT0"`  | Battery directory name in `/sys/class/power_supply/` |
+| `interval` | `30`      | Polling interval in seconds, minimum 1               |
+| `colors`   | see below | Outline and fill colours                             |
 
-| Опция      | По умолчанию | Описание                                          |
-|------------|--------------|---------------------------------------------------|
-| `battery`  | `"BAT0"`     | Имя каталога батареи в `/sys/class/power_supply/`  |
-| `interval` | `30`         | Интервал опроса в секундах, минимум 1              |
-| `colors`   | см. ниже     | Цвета контура и заливки                            |
-
-Опции передаются первым аргументом `battery_widget.new()`:
+Options are passed as the first argument of `battery_widget.new()`:
 
 ```lua
 battery_widget.new({ battery = "BAT1" })
 ```
 
-### Цвета
+### Colours
 
-Цвета задаются опцией `colors` в виде hex-строк, полных (`#79A8C4`)
-или сокращённых (`#7AC`):
+Colours are set with the `colors` option as hex strings, either full
+(`#79A8C4`) or short (`#7AC`):
 
 ```lua
 battery_widget.new({
     colors = {
-        border   = "#272727", -- контур корпуса
-        charging = "#79A8C4", -- при зарядке
-        low      = "#C45555", -- ниже 30%
-        medium   = "#D6AD48", -- от 30 до 60%
-        normal   = "#272727", -- выше 60%
+        border   = "#272727", -- battery outline
+        charging = "#79A8C4", -- while charging
+        low      = "#C45555", -- below 30%
+        medium   = "#D6AD48", -- 30 to 60%
+        normal   = "#272727", -- above 60%
     },
 })
 ```
 
-Некорректное значение или пропущенный ключ заменяются цветом по умолчанию.
+An invalid value or a missing key falls back to the default colour.
 
+## Charge time estimate
 
-## Время до полной зарядки
+"Until full" is an approximation, not an exact time: the charging current
+changes and drops noticeably near the end of the charge, so the number may
+stall or even grow.
 
-«До полной» — приблизительная оценка, а не точное время: ток зарядки
-меняется, а в конце заряда заметно падает, поэтому цифра может
-оставаться на месте или увеличиваться.
+The widget records the charge on every poll (every 30 seconds by default) and
+averages the rate over the last 15 minutes across all samples in the window.
+While there is less than 5 minutes of history, or the growth over the window is
+below 2%, it falls back to the instantaneous current. If current data is
+unavailable, it shows "Until full: —".
 
-Виджет запоминает заряд раз в 30 секунд и считает средний темп за
-последние 15 минут по всем замерам окна. Пока истории меньше 5 минут
-или прирост за окно меньше 2%, показывается оценка по мгновенному току.
-Если данных о токе нет, выводится «До полной: —».
+The result is rounded: exact below 10 minutes, in 5-minute steps up to an hour,
+and in 10-minute steps beyond that.
 
-Результат округляется: до 10 минут — точно, до часа — шагом 5 минут,
-дальше — шагом 10 минут.
+## Tips
 
-
-## Полезные советы
-
-### Как узнать имя батареи
+### Finding the battery name
 
 ```sh
 ls /sys/class/power_supply/
 ```
 
-Обычно это `BAT0`, `BAT1` и т. п. Убедиться, что выбранный каталог
-действительно является батареей, можно так:
+Usually the name is `BAT0`, `BAT1`, etc. To check that the chosen directory is
+really a battery:
 
 ```sh
 cat /sys/class/power_supply/BAT0/type
 # Battery
 ```
+
+## Limitations
+
+- The estimate is approximate: the charging current varies and drops near full,
+  so the number may stall or grow.
+- Only one battery is monitored at a time; use the `battery` option to choose it.
+- The widget is not hidden when the battery is absent; hovering shows the path
+  it searched.
+
+## License
+
+MIT. See [LICENSE](LICENSE).

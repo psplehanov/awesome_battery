@@ -15,7 +15,7 @@ local DEFAULT_COLORS = {
     normal   = "#272727",
 }
 
--- ===== Чтение sysfs =====
+-- ===== sysfs reading =====
 
 local function read_num(path)
     local f = io.open(path, "r")
@@ -33,7 +33,7 @@ local function read_str(path)
     return (v:gsub("%s+$", ""))
 end
 
--- ===== Сбор данных =====
+-- ===== Data collection =====
 
 local function clamp_percent(value)
     return math.max(0, math.min(100, value))
@@ -47,7 +47,7 @@ local CHARGE_WINDOW     = 15 * 60
 local CHARGE_MIN_SPAN   = 5 * 60
 local CHARGE_MIN_GROWTH = 0.02
 
--- Наклон по всем точкам окна: устойчивее разности первого и последнего замера.
+-- Slope over all points in the window: more stable than the difference between the first and last sample.
 local function trend(history)
     local n = #history
     if n < 3 then return nil end
@@ -88,7 +88,7 @@ local function estimate_minutes(history, value, goal, timestamp)
     local rate = trend(history)
     if not rate or rate <= 0 then return nil end
 
-    -- Прирост меньше 2% не отличить от шага квантования 1%.
+    -- Growth below 2% is indistinguishable from the 1% quantization step.
     if rate * span < goal * CHARGE_MIN_GROWTH then return nil end
 
     local left = goal - value
@@ -103,7 +103,7 @@ local function progress(b)
     return b.level, 100, "level"
 end
 
--- Резкое изменение принимается только после подтверждения следующим замером.
+-- A sharp change is accepted only after the next sample confirms it.
 local function blend_estimate(state, previous, fresh)
     if fresh == nil then return previous end
 
@@ -211,7 +211,7 @@ local function read_battery(sys)
     }
 end
 
--- ===== Виджет =====
+-- ===== Widget =====
 
 local function parse_color(value)
     if type(value) ~= "string" then return nil end
@@ -306,7 +306,7 @@ function M.new(opts)
 
         local fresh = estimate_until_full(b)
         if type(fresh) ~= "number" then
-            fresh = b.until_full -- прогресс не измерим, показываем оценку по току
+            fresh = b.until_full -- progress is not measurable, fall back to the current-based estimate
         else
             fresh = round_minutes(fresh)
         end
@@ -322,17 +322,15 @@ function M.new(opts)
         local w, h = width, height
         local s = widget._state
 
-        -- Контур корпуса (отступ сверху под контакт)
+        -- Body outline (top inset for the terminal)
         set_color(cr, colors.border)
         cr:set_line_width(1.4)
         cr:rectangle(0.7, 3.7, w - 1.4, h - 4.4)
         cr:stroke()
 
-        -- Контакт сверху
         cr:rectangle(w / 2 - 2, 0.5, 4, 2.5)
         cr:fill()
 
-        -- Заливка
         if s.charging then
             set_color(cr, colors.charging)
         elseif s.level < 30 then
@@ -354,7 +352,7 @@ function M.new(opts)
         end
     end
 
-    -- ===== Всплывашка =====
+    -- ===== Popup =====
 
     local notif = nil
 
@@ -414,7 +412,7 @@ function M.new(opts)
     widget:connect_signal("mouse::enter", function() widget:show_details() end)
     widget:connect_signal("mouse::leave", function() widget:hide_details() end)
 
-    -- ===== Обновление =====
+    -- ===== Update =====
 
     local function update()
         local b = read_battery(sys)
